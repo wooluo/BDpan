@@ -495,5 +495,6 @@
   "downloads.extractDone": "已解压",
   "downloads.extractImages": "{n} 个游戏镜像已装入 homebrew",
   "downloads.extractRetry": "重试",
-  "browser.extractHint": "下载后可在「下载」页解压；其中的游戏镜像会自动装入 homebrew"
+  "browser.extractHint": "下载后可在「下载」页解压；其中的游戏镜像会自动装入 homebrew",
+  "downloads.extractAgain": "重新解压"
 }

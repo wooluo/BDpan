@@ -79,9 +79,16 @@ function JobRow({ job, manager }) {
               </Text>
             </>
           ) : job.extractState === 'done' ? (
-            <Text style={{ fontFamily: 'Inter-Regular', fontSize: 20, color: '#7ee081' }}>
-              {t('downloads.extractDone')}{job.extractImages ? ` · ${t('downloads.extractImages', { n: job.extractImages })}` : ''}
-            </Text>
+            <>
+              <Text style={{ flex: 1, fontFamily: 'Inter-Regular', fontSize: 20, color: '#7ee081' }}>
+                {t('downloads.extractDone')}{job.extractImages ? ` · ${t('downloads.extractImages', { n: job.extractImages })}` : ''}
+              </Text>
+              <motion.View focusKey={`extract-again:${job.id}`} onPress={() => manager.extract(job.id)} style={actionStyle}>
+                <FocusRing />
+                <Icon name="folder" size={18} color={colors.fg} fill="none" />
+                <Text style={actionTextStyle}>{t('downloads.extractAgain')}</Text>
+              </motion.View>
+            </>
           ) : job.extractState === 'error' ? (
             <>
               <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Inter-Regular', fontSize: 19, color: '#ff6b6b' }}>{job.extractError}</Text>

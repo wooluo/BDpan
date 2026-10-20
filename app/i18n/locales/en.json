@@ -523,5 +523,6 @@
   "downloads.extractDone": "Extracted",
   "downloads.extractImages": "{n} game image(s) moved to homebrew",
   "downloads.extractRetry": "Retry",
-  "browser.extractHint": "After download, extract it from the Downloads tab; game images inside go to homebrew automatically"
+  "browser.extractHint": "After download, extract it from the Downloads tab; game images inside go to homebrew automatically",
+  "downloads.extractAgain": "Extract again"
 }

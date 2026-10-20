@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/half144/ps5-react/main/app.schema.json",
+  "titleId": "PPSA99100",
+  "contentId": "UP9000-PPSA99100_00-BAIDUPAN00000000",
+  "name": "BaiduPan",
+  "version": "01.000.000",
+  "render": { "width": 1920, "height": 1080 },
+  "surface": { "width": 1920, "height": 1080 },
+  "refreshRate": 60,
+  "textFonts": ["chinese"],
+  "resources": ["i18n/locales"],
+  "filesystemAccess": "console",
+  "networking": true,
+  "timeoutSeconds": 0
+}

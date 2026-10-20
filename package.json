@@ -1,0 +1,30 @@
+{
+  "name": "overdrive",
+  "private": true,
+  "description": "Overdrive, a PS5 game store. The scripts wrap the ps5-react build for this app.",
+  "//": [
+    "JSON has no comments; npm ignores this key.",
+    "",
+    "setup      Run once after cloning. Installs every dependency: the apt or Homebrew packages",
+    "           for the preview, the PS5 build and the tests (asks for sudo on Linux), Pillow, and",
+    "           the framework's npm packages. See packaging/setup.sh.",
+    "build      Builds the PS5 app, then packages Overdrive.exfat and update.zip here, like the",
+    "           GitHub workflow. Needs LLVM 18, cmake, ninja, nasm, exfatprogs; asks for sudo",
+    "           to mount the image while filling it. See packaging/build.sh.",
+    "build:app  The PS5 build only, into ps5-react/dist/PPSA99058. No sudo.",
+    "preview    Opens the app in the desktop preview window on this PC. No PS5 toolchain needed.",
+    "dev        Same window, rebuilt and restarted on every save under app/. State resets.",
+    "test       The framework's checks; run after changing rendering or input in ps5-react/.",
+    "",
+    "CC=clang CXX=clang++: the preview is compiled with clang on every platform, since GCC",
+    "stops on a bounds warning in archive_preflight.cpp."
+  ],
+  "scripts": {
+    "setup": "bash packaging/setup.sh",
+    "build": "bash packaging/build.sh",
+    "build:app": "bash packaging/build.sh --no-package",
+    "preview": "cd ps5-react && CC=clang CXX=clang++ python3 tools/cli.py preview --app-dir ../app",
+    "dev": "cd ps5-react && CC=clang CXX=clang++ python3 tools/cli.py preview --app-dir ../app --watch",
+    "test": "cd ps5-react && CC=clang CXX=clang++ npm test"
+  }
+}

@@ -19,8 +19,10 @@ if [ -z "$app" ] || [ -z "$out" ]; then
 fi
 [ -d "$app" ] || { echo "error: no such app folder: $app" >&2; exit 1; }
 [ -f "$app/eboot.bin" ] || { echo "error: $app has no eboot.bin, it is not a built PS5 app" >&2; exit 1; }
-[ "$(id -u)" = 0 ] || { echo "error: needs root to mount the image, run it with sudo" >&2; exit 1; }
-command -v mkfs.exfat >/dev/null || { echo "error: mkfs.exfat not found, install exfatprogs" >&2; exit 1; }
+if [ "$(uname -s)" != Darwin ]; then
+    [ "$(id -u)" = 0 ] || { echo "error: needs root to mount the image, run it with sudo" >&2; exit 1; }
+    command -v mkfs.exfat >/dev/null || { echo "error: mkfs.exfat not found, install exfatprogs" >&2; exit 1; }
+fi
 
 # Size the image from what exFAT actually consumes. Every file takes whole
 # clusters, and this app ships thousands of small JSON files, so the payload's
@@ -34,14 +36,47 @@ case "$cluster" in
     128K|128k) cluster_bytes=131072 ;;
     *) cluster_bytes=65536 ;;
 esac
-clusters=$(find "$app" -type f -printf '%s\n' |
-    awk -v c="$cluster_bytes" '{ n += int(($1 + c - 1) / c) } END { print n + 0 }')
+file_sizes() {
+    if [ "$(uname -s)" = Darwin ]; then
+        find "$app" -type f -exec stat -f %z {} +
+    else
+        find "$app" -type f -printf '%s\n'
+    fi
+}
+clusters=$(file_sizes | awk -v c="$cluster_bytes" '{ n += int(($1 + c - 1) / c) } END { print n + 0 }')
 directories=$(find "$app" -type d | wc -l)
 payload=$(( (clusters + directories) * cluster_bytes ))
 size=$(( (payload + slack + 1048575) / 1048576 * 1048576 ))
 
 mkdir -p "$(dirname "$out")"
 rm -f "$out"
+
+# macOS has neither exfatprogs nor loop mounts, but hdiutil formats and attaches
+# an exFAT image for the current user with no root at all.
+if [ "$(uname -s)" = Darwin ]; then
+    dev=$(hdiutil create -size "$size" -layout NONE -fs exfat -volname "$label" -attach "$out" 2>/dev/null |
+        sed -n 's/^\(\/dev\/disk[0-9]*\).*/\1/p' | head -1)
+    [ -n "$dev" ] || { echo "error: hdiutil could not create an exFAT image" >&2; exit 1; }
+    volume="/Volumes/$label"
+    if ! cp -R "$app/." "$volume/"; then
+        hdiutil detach "$dev" >/dev/null 2>&1
+        echo "error: copying into the image failed" >&2
+        exit 1
+    fi
+    src=$(find "$app" -type f | wc -l)
+    dst=$(find "$volume" -type f | wc -l)
+    if [ "$src" != "$dst" ]; then
+        hdiutil detach "$dev" >/dev/null 2>&1
+        echo "error: wrote $dst files, the app has $src" >&2
+        exit 1
+    fi
+    sync
+    hdiutil detach "$dev" >/dev/null
+    echo "hdiutil: label $label, $size bytes"
+    echo "wrote $out ($(stat -f%z "$out") bytes)"
+    exit 0
+fi
+
 truncate -s "$size" "$out"
 
 # Not every exfatprogs takes a cluster size, and the default it would otherwise

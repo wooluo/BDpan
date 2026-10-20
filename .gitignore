@@ -3,7 +3,7 @@
 .build/
 dist/
 node_modules/
-/Overdrive.exfat
+/BaiduPan.exfat
 /update.zip
 
 # Python

@@ -164,19 +164,18 @@ function createDownloadManager({ client, tokens }) {
         job.written = snapshot.written ?? 0;
         job.total = snapshot.total ?? job.sizeBytes;
         job.bytesPerSecond = snapshot.bytesPerSecond ?? 0;
-        if (job.state === 'complete') job.completedAt = now();
-        if (job.state === 'error') job.error = snapshot.error || 'download failed';
+        if (job.state === 'completed') job.completedAt = now();
+        if (job.state === 'failed') job.error = snapshot.error || 'download failed';
         notify();
       });
       await task.done.finally(() => { off(); });
       if (job.state !== 'paused') {
         // The engine's own final snapshot is the truth; the progress callback may
-        // lag the done promise.
-        const finalState = task.snapshot?.state;
-        const settled = finalState === 'complete' || job.state === 'complete' ? 'done'
-          : finalState === 'error' || job.state === 'error' ? 'error' : 'error';
+        // lag the done promise. Terminal states are 'completed'/'failed'/'cancelled'.
+        const finalState = task.snapshot?.state || job.state;
+        const settled = finalState === 'completed' ? 'done' : 'error';
         job.state = settled;
-        if (job.state === 'error' && !job.error) job.error = task.snapshot?.error || 'download failed';
+        if (settled === 'error' && !job.error) job.error = task.snapshot?.error || 'download failed';
         if (job.state === 'done') job.completedAt = now();
         job.bytesPerSecond = 0;
       }

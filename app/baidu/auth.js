@@ -83,10 +83,10 @@ function createAuth({ dataDir }) {
       });
       const data = json();
       if (!data?.sign || !data?.imgurl) throw new Error('QR session refused');
-      return {
-        sign: data.sign,
-        imgUrl: data.imgurl.startsWith('http') ? data.imgurl : `https:${data.imgurl}`,
-      };
+      // The API hands out the image address with or without the leading "//"; normalize both.
+      const raw = data.imgurl;
+      const imgUrl = raw.startsWith('http') ? raw : raw.startsWith('//') ? `https:${raw}` : `https://${raw}`;
+      return { sign: data.sign, imgUrl };
     },
     // One call waits out the server's long poll; resolve = confirmed, reject = keep waiting.
     async waitForScan(sign, signal) {

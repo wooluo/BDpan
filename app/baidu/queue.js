@@ -3,13 +3,15 @@
 // the engine's checkpoint is keyed by destination+size, so a paused file
 // resumes from the same partial however many times the link is re-resolved.
 
-import { Downloads, FileSystem, Platform } from '@ps5-react/core';
+import { Downloads, FileSystem, Http, Platform } from '@ps5-react/core';
 import { NETDISK_UA } from './api.js';
 
 const IMAGE_EXT = /\.(ffpfsc|ffpfs|ffpkg|exfat)$/i;
 const STATE_FILE = 'baidupan/downloads.json';
 
 function now() { return Date.now(); }
+
+function hostOf(url) { return url.replace(/^https?:\/\//, '').split('/')[0]; }
 
 function ensureDir(fs, dir) {
   const parts = dir.split('/').filter(Boolean);
@@ -36,6 +38,7 @@ function formatBytes(bytes) {
 
 function createDownloadManager({ client, tokens }) {
   const fs = FileSystem;
+  console.log('[baidupan] manager created');
   const listeners = new Set();
   let jobs = [];
   let task = null;
@@ -51,8 +54,12 @@ function createDownloadManager({ client, tokens }) {
   try {
     jobs = JSON.parse(fs.readFile(`${stateDir(fs)}/downloads.json`)) || [];
     jobs.forEach((job) => {
-      if (job.state === 'downloading' || job.state === 'connecting' || job.state === 'queued') job.state = 'paused';
+      // Interrupted transfers wait for the player; queued ones are an ask that was
+      // never answered, so they start again by themselves.
+      if (job.state === 'downloading' || job.state === 'connecting') job.state = 'paused';
     });
+    const pending = jobs.some((job) => job.state === 'queued');
+    if (pending) setTimeout(() => pump(), 500);
   } catch {}
 
   const persist = () => {
@@ -72,6 +79,43 @@ function createDownloadManager({ client, tokens }) {
     return `${folder}/${job.filename}`;
   }
 
+  // The CDN hands out two kinds of nodes: ones serving ranged bytes straight over
+  // https (baidupcs.com, preferred — they work on SNI-filtered networks too) and
+  // ones answering a redirect to a plain-http carrier node. Probing picks every
+  // direct node as url+mirrors (the engine spreads ranges across them, keeping
+  // per-link hit counts low); if only redirecting nodes exist, follow the first
+  // Location ourselves — the engine refuses https→http redirect downgrades.
+  async function pickDownloadUrl(urls) {
+    const direct = [];
+    let redirected = null;
+    for (const candidate of urls) {
+      if (direct.length >= 2) break;
+      try {
+        // A one-byte ranged GET, not HEAD: the pcs nodes answer HEAD with 403.
+        const probe = await Http.request(candidate, {
+          method: 'GET',
+          headers: { 'User-Agent': NETDISK_UA, Range: 'bytes=0-0' },
+          followRedirects: false,
+          maxBytes: 64,
+        });
+        console.log(`[baidupan] probe ${hostOf(candidate)} -> ${probe.status}`);
+        if (probe.status >= 200 && probe.status < 300) direct.push(candidate);
+        else if (!redirected && probe.status >= 300 && probe.status < 400 && probe.headers?.location) {
+          redirected = probe.headers.location;
+        }
+      } catch (error) {
+        const text = String(error.message || error);
+        // maxBytes overflowing means the node ignored Range and streamed the file: usable,
+        // the engine falls back to one sequential transfer there.
+        if (text.includes('exceeds maxBytes')) direct.push(candidate);
+        else console.log(`[baidupan] probe ${hostOf(candidate)} threw: ${text}`);
+      }
+    }
+    if (direct.length) return { url: direct[0], mirrors: direct.slice(1) };
+    if (redirected) return { url: redirected, mirrors: [] };
+    throw new Error('no usable download node');
+  }
+
   async function pump() {
     if (pumping || task) return;
     const job = jobs.find((entry) => entry.state === 'queued');
@@ -82,10 +126,25 @@ function createDownloadManager({ client, tokens }) {
     notify();
     try {
       const urls = await client.locate(job.path);
+      const { url, mirrors } = await pickDownloadUrl(urls);
+      console.log(`[baidupan] download ${job.filename} via ${hostOf(url)} (+${mirrors.length} mirrors)`);
       const destination = job.destination || destinationFor(job, job.root || '/data');
       job.destination = destination;
+      // The engine refuses to touch an existing destination; a same-size file from an
+      // earlier run counts as delivered rather than as a failure.
+      try {
+        const stat = fs.stat(destination);
+        if (stat?.size === (job.sizeBytes || 0)) {
+          job.state = 'done';
+          job.written = job.total = job.sizeBytes;
+          job.completedAt = now();
+          console.log(`[baidupan] ${job.filename} already on disk, marking done`);
+          return;
+        }
+      } catch {}
       task = Downloads.enqueue({
-        url: urls[0],
+        url,
+        mirrors,
         destination,
         headers: { 'User-Agent': NETDISK_UA },
         expectedBytes: job.sizeBytes || undefined,
@@ -106,14 +165,30 @@ function createDownloadManager({ client, tokens }) {
       });
       await task.done.finally(() => { off(); });
       if (job.state !== 'paused') {
-        job.state = job.state === 'complete' ? 'done' : job.state === 'error' ? 'error' : 'error';
-        if (job.state === 'error' && !job.error) job.error = 'download failed';
+        // The engine's own final snapshot is the truth; the progress callback may
+        // lag the done promise.
+        const finalState = task.snapshot?.state;
+        const settled = finalState === 'complete' || job.state === 'complete' ? 'done'
+          : finalState === 'error' || job.state === 'error' ? 'error' : 'error';
+        job.state = settled;
+        if (job.state === 'error' && !job.error) job.error = task.snapshot?.error || 'download failed';
+        if (job.state === 'done') job.completedAt = now();
         job.bytesPerSecond = 0;
       }
     } catch (error) {
       if (job.state !== 'paused') {
-        job.state = 'error';
-        job.error = error.message || String(error);
+        // The CDN throttles bursts of link hits; one fresh locate on another node
+        // usually clears a 403 without bothering the player.
+        const text = String(error.message || error);
+        if (text.includes('403') && !job.autoRetried) {
+          job.autoRetried = true;
+          job.state = 'queued';
+          console.log('[baidupan] 403 from the node, re-locating in 4s');
+          setTimeout(() => pump(), 4000);
+        } else {
+          job.state = 'error';
+          job.error = text;
+        }
       }
     } finally {
       task = null;

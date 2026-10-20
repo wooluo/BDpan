@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+struct curl_slist;
+
 namespace network {
 struct Piece {
   std::string url, sha1;
@@ -52,8 +54,12 @@ bool downloading();
 bool running();
 const char* version();
 // Applies the transport policy every request shares (protocols, redirects, TLS trust, timeouts,
-// identity encoding and the PS5 socket options) to a libcurl easy handle.
-bool configure_transport(void* curl, const std::string& url, bool follow_redirects);
+// identity encoding and the PS5 socket options) to a libcurl easy handle. On filtered Baidu
+// hosts the connection is fronted under www.baidu.com; a caller that passes the out-params
+// gets the resolve pin to free and the real Host header value to send. Callers passing
+// neither keep the plain policy.
+bool configure_transport(void* curl, const std::string& url, bool follow_redirects,
+                         curl_slist** owned_resolve = nullptr, std::string* host_header = nullptr);
 // Platform owns libSceNet lifecycle and the trust-store path; desktop uses defaults.
 bool platform_start(std::string& error);
 void platform_stop();

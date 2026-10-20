@@ -31,6 +31,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 
 namespace network {
 namespace {
@@ -105,6 +107,8 @@ struct Transfer {
   Service* owner = nullptr;
   CURL* curl = nullptr;
   curl_slist* headers = nullptr;
+  // The resolve pin a fronted Baidu host needs; freed beside `headers`.
+  curl_slist* resolve = nullptr;
   std::shared_ptr<Job> job;
   Block* block = nullptr;
   std::size_t fill = 0, header_bytes = 0;
@@ -516,13 +520,91 @@ bool verify_file(Job& job) {
 
 } // namespace
 
-bool configure_transport(void* handle, const std::string& url, bool follow_redirects) {
+// Some networks cut TLS to Baidu's netdisk hosts on the SNI name (the office line this app was
+// built on resets pan/pcs/baidupcs handshakes while passport and www pass). Every one of those
+// edges also answers under www.baidu.com's name with Baidu's shared certificate, so they are
+// fronted: connect and verify as www.baidu.com with the real IP pinned, and send the real host
+// in the Host header (added by the caller, which owns the header list). Verified against the
+// live edges; ordinary traffic as far as Baidu can tell, and harmless on unfiltered networks.
+namespace {
+std::string host_text(const std::string& url) {
+  const auto scheme = url.find("://");
+  const auto start = scheme == std::string::npos ? 0 : scheme + 3;
+  const auto end = url.find_first_of("/?#", start);
+  return url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+}
+bool ends_with(const std::string& text, const char* suffix) {
+  const std::size_t length = std::strlen(suffix);
+  return text.size() >= length && text.compare(text.size() - length, length, suffix) == 0;
+}
+// Which alias a filtered host connects and verifies under: the pan/pcs edges serve the
+// wide *.baidu.com certificate to any name, while the baidupcs download edges serve a
+// pcsdata.baidu.com certificate — each family is fronted under a name its edge really
+// covers, so certificate checking never loosens.
+const char* fronted_baidu_alias(const std::string& host) {
+  if (host == "pan.baidu.com" || host == "pcs.baidu.com" || host == "d.pcs.baidu.com") return "www.baidu.com";
+  if (ends_with(host, ".baidupcs.com")) return "pcsdata.baidu.com";
+  return nullptr;
+}
+std::string resolve_ipv4_cached(const std::string& host) {
+  static std::mutex mutex;
+  static std::string cached_host, cached_ip;
+  static std::chrono::steady_clock::time_point cached_at{};
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto now = std::chrono::steady_clock::now();
+  if (host == cached_host && !cached_ip.empty() && now - cached_at < std::chrono::seconds(120))
+    return cached_ip;
+  addrinfo hints{};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* result = nullptr;
+  if (getaddrinfo(host.c_str(), "443", &hints, &result) != 0 || !result) return {};
+  char buffer[INET_ADDRSTRLEN] = {};
+  inet_ntop(AF_INET, &reinterpret_cast<sockaddr_in*>(result->ai_addr)->sin_addr, buffer, sizeof buffer);
+  freeaddrinfo(result);
+  if (!buffer[0]) return {};
+  cached_host = host;
+  cached_ip = buffer;
+  cached_at = now;
+  return cached_ip;
+}
+std::string with_host(const std::string& url, const std::string& host, const std::string& next) {
+  const auto scheme = url.find("://");
+  if (scheme == std::string::npos) return {};
+  const auto start = scheme + 3;
+  const auto end = url.find_first_of("/?#", start);
+  const auto length = (end == std::string::npos ? url.size() : end) - start;
+  if (url.compare(start, length, host) != 0) return {};
+  std::string out = url;
+  out.replace(start, length, next);
+  return out;
+}
+} // namespace
+
+bool configure_transport(void* handle, const std::string& url, bool follow_redirects,
+                         curl_slist** owned_resolve, std::string* host_header) {
   CURL* curl = static_cast<CURL*>(handle);
   bool ok = true;
   const auto set = [&](CURLoption option, auto value) {
     if (curl_easy_setopt(curl, option, value) != CURLE_OK) ok = false;
   };
-  set(CURLOPT_URL, url.c_str());
+  std::string effective = url;
+  const std::string host = host_text(url);
+  if (const char* alias = fronted_baidu_alias(host); alias && owned_resolve && host_header) {
+    // Fronting only with a caller that takes the pin and restores the Host header; the image
+    // loader passes neither and its hosts (passport) never route here.
+    const std::string ip = resolve_ipv4_cached(host);
+    if (ip.empty()) return false;
+    const std::string pin = std::string(alias) + ":443:" + ip;
+    curl_slist* resolve = curl_slist_append(nullptr, pin.c_str());
+    if (!resolve) return false;
+    set(CURLOPT_RESOLVE, resolve);
+    *owned_resolve = resolve;
+    effective = with_host(url, host, alias);
+    if (effective.empty()) return false;
+    *host_header = host;
+  }
+  set(CURLOPT_URL, effective.c_str());
   set(CURLOPT_NOSIGNAL, 1L);
   set(CURLOPT_PROTOCOLS_STR, "http,https");
   set(CURLOPT_REDIR_PROTOCOLS_STR, url.starts_with("https:") ? "https" : "http,https");
@@ -779,6 +861,7 @@ void Service::stop() {
   writers_started_ = 0; sync_started_ = false;
   for (Transfer& t : transfers_) {
     if (t.headers) curl_slist_free_all(t.headers);
+    if (t.resolve) curl_slist_free_all(t.resolve);
     if (t.curl) curl_easy_cleanup(t.curl);
     t.headers = nullptr; t.curl = nullptr; t.job.reset();
   }
@@ -977,7 +1060,8 @@ std::size_t Service::body(char* data, std::size_t size, std::size_t count, void*
 bool Service::configure(Transfer& t) {
   curl_easy_reset(t.curl);
   if (t.headers) curl_slist_free_all(t.headers);
-  t.headers = nullptr; t.status = 0; t.header_bytes = 0;
+  if (t.resolve) curl_slist_free_all(t.resolve);
+  t.headers = nullptr; t.resolve = nullptr; t.status = 0; t.header_bytes = 0;
   t.etag.clear(); t.last_modified.clear(); t.encoding.clear(); t.error.clear(); t.content_type.clear();
   t.response_headers.clear(); t.html_prefix.clear(); t.sample.clear();
   t.content_range = false; t.length_known = false; t.paused = false; t.rate_paused = false; t.retry_after = 0; t.glitch = false;
@@ -1002,7 +1086,11 @@ bool Service::configure(Transfer& t) {
   const bool ranged = source ? source->ranged : job.ranged;
   if (ranged && !t.probe && !validator.empty()) add("If-Range: " + validator);
   // Custom application headers must never be forwarded to an unrelated redirect origin.
-  if (!configure_transport(t.curl, url, job.request.follow_redirects && job.request.headers.empty())) ok = false;
+  std::string fronted_host;
+  if (!configure_transport(t.curl, url, job.request.follow_redirects && job.request.headers.empty(),
+                           &t.resolve, &fronted_host)) ok = false;
+  // A fronted Baidu host connected under www.baidu.com needs its real name restored here.
+  if (!fronted_host.empty()) add("Host: " + fronted_host);
   // body() copies each callback into one block, so curl must never hand over more than a block. Smaller
   // still: older curl gives every one of the 64 transfers its own buffer, out of the title's heap.
   set(CURLOPT_BUFFERSIZE, 64L * 1024);
@@ -1716,6 +1804,6 @@ void set_rate_limit(std::uint64_t) {}
 bool downloading() { return false; }
 bool running() { return false; }
 const char* version() { return "disabled"; }
-bool configure_transport(void*, const std::string&, bool) { return false; }
+bool configure_transport(void*, const std::string&, bool, curl_slist** = nullptr, std::string* = nullptr) { return false; }
 } // namespace network
 #endif

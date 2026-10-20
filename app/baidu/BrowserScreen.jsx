@@ -69,6 +69,7 @@ export function BrowserScreen({ manager, client }) {
     setError(null);
     try {
       const list = await client.list(path, SORTS[sort]);
+      console.log(`[baidupan] listed ${path}: ${list.length} entries`);
       const folders = list.filter((entry) => entry.isDir);
       const files = list.filter((entry) => !entry.isDir);
       setEntries([...folders, ...files]);

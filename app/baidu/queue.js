@@ -279,6 +279,9 @@ function createDownloadManager({ client, tokens }) {
         .replace(ARCHIVE_EXT, '')
         .replace(/[.]+$/, '') || 'archive';
       const outDir = `${job.root}/downloads/baidupan/${label}`;
+      // The engine refuses to extract over leftovers from an earlier attempt
+      // (its receipt won't match); the folder is disposable, the source isn't.
+      try { if (fs.exists(outDir)) fs.removeTree(outDir); } catch {}
       ensureDir(fs, outDir);
       job.extractState = 'extracting';
       job.extractError = null;

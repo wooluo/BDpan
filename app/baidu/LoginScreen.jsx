@@ -6,7 +6,9 @@ import { colors } from '../ui/colors.js';
 import { useT } from '../i18n/index.js';
 import { useAuth } from './auth.js';
 
-const QR_MS = 5 * 60 * 1000; // the QR itself lives ~10 minutes; refresh earlier
+// Baidu's QR sign lives about three minutes; swap in a fresh code automatically
+// instead of stranding the user on an expired-error screen.
+const QR_MS = 170 * 1000;
 
 function QRFrame({ url }) {
   return (
@@ -26,37 +28,43 @@ export function LoginScreen() {
 
   const run = useCallback(async () => {
     cancelled.current = false;
-    setPhase('starting');
-    setError(null);
-    try {
-      const qr = await auth.raw.beginQR();
-      console.log(`[baidupan] QR ok: ${qr.sign} img=${qr.imgUrl.slice(0, 60)}`);
-      if (cancelled.current) return;
-      setSession(qr);
-      setPhase('waiting');
-      const deadline = Date.now() + QR_MS;
-      while (!cancelled.current && Date.now() < deadline) {
-        let temp;
-        try {
-          temp = await auth.raw.waitForScan(qr.sign);
-        } catch (pollError) {
-          if (cancelled.current) return;
-          if (String(pollError.message).includes('cancelled')) throw pollError;
-          continue; // poll timed out or dropped: keep waiting while the QR lives
-        }
+    // Each pass is one QR's lifetime; on expiry (or a transient failure) the
+    // outer loop silently starts a fresh code. Only a real login failure stops.
+    while (!cancelled.current) {
+      setPhase('starting');
+      setError(null);
+      try {
+        const qr = await auth.raw.beginQR();
+        console.log(`[baidupan] QR ok: ${qr.sign} img=${qr.imgUrl.slice(0, 60)}`);
         if (cancelled.current) return;
-        setPhase('exchanging');
-        await auth.complete(temp);
+        setSession(qr);
+        setPhase('waiting');
+        const deadline = Date.now() + QR_MS;
+        while (!cancelled.current && Date.now() < deadline) {
+          let temp;
+          try {
+            temp = await auth.raw.waitForScan(qr.sign);
+          } catch (pollError) {
+            if (cancelled.current) return;
+            if (String(pollError.message).includes('cancelled on the phone')) throw pollError;
+            if (String(pollError.message).includes('expired')) break; // swap in a fresh QR
+            continue; // poll timed out or dropped: keep waiting while the QR lives
+          }
+          if (cancelled.current) return;
+          setPhase('exchanging');
+          await auth.complete(temp);
+          return;
+        }
+      } catch (runError) {
+        if (cancelled.current) return;
+        console.log(`[baidupan] login run failed: ${runError.message || runError}`);
+        setPhase('error');
+        setError(runError.message || String(runError));
         return;
       }
-      if (!cancelled.current) setPhase('error'), setError(t('login.expired'));
-    } catch (runError) {
-      if (cancelled.current) return;
-      console.log(`[baidupan] login run failed: ${runError.message || runError}`);
-      setPhase('error');
-      setError(runError.message || String(runError));
+      await new Promise((resolve) => setTimeout(resolve, 800)); // next QR
     }
-  }, [auth, t]);
+  }, [auth]);
 
   useEffect(() => {
     run();

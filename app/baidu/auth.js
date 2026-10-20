@@ -97,7 +97,8 @@ function createAuth({ dataDir }) {
       const inner = /channel_v['"]\s*:\s*['"](.+?)['"]\s*[,}]/.exec(text || '');
       if (!inner) throw new Error('poll ended without an answer');
       const event = JSON.parse(inner[1].replace(/\\"/g, '"'));
-      if (event.status !== 0 || !event.v) throw new Error('QR was cancelled on the phone');
+      if (!event.v) throw new Error('QR expired');
+      if (event.status !== 0) throw new Error('QR was cancelled on the phone');
       return event.v;
     },
     async complete(tempBduss) {

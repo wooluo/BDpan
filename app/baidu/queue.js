@@ -279,10 +279,11 @@ function createDownloadManager({ client, tokens }) {
         .replace(ARCHIVE_EXT, '')
         .replace(/[.]+$/, '') || 'archive';
       const outDir = `${job.root}/downloads/baidupan/${label}`;
-      // The engine refuses to extract over leftovers from an earlier attempt
-      // (its receipt won't match); the folder is disposable, the source isn't.
+      // The extraction engine must create the destination itself: an existing
+      // folder (even empty) makes it demand a matching completion receipt.
+      // Wipe leftovers, prepare only the parent, hand it a path that is gone.
+      ensureDir(fs, dirNameOf(outDir));
       try { if (fs.exists(outDir)) fs.removeTree(outDir); } catch {}
-      ensureDir(fs, outDir);
       job.extractState = 'extracting';
       job.extractError = null;
       job.extractWritten = 0;
@@ -298,7 +299,8 @@ function createDownloadManager({ client, tokens }) {
         });
         try { await task.done; } finally { off(); }
         const images = moveGameImages(outDir, job.root);
-        if (!walkFiles(outDir).length) { try { fs.removeTree(outDir); } catch {} }
+        const visible = walkFiles(outDir).filter((file) => !file.split('/').pop().startsWith('.'));
+        if (!visible.length) { try { fs.removeTree(outDir); } catch {} }
         job.extractState = 'done';
         job.extractImages = images;
         console.log(`[baidupan] ${job.filename}: extracted, ${images} game image(s) -> ${job.root}/homebrew`);

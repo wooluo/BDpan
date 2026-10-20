@@ -73,7 +73,8 @@ export function BrowserScreen({ manager, client }) {
   const [error, setError] = useState(null);
   const [sortIndex, setSortIndex] = useState(0);
   const [quota, setQuota] = useState(null);
-  const [picked, setPicked] = useState(null); // file detail dialog
+  const [picked, setPicked] = useState(null); // file/folder dialog
+  const [scan, setScan] = useState(null); // {running, found} | {done} | {error}
   const [targetRoot, setTargetRoot] = useState(() => {
     const saved = loadList(SETTINGS, 'settings').downloadRoot;
     return saved || '/data';
@@ -113,8 +114,25 @@ export function BrowserScreen({ manager, client }) {
   }, [client]);
 
   const open = (entry) => {
-    if (entry.isDir) { setPicked(null); setDir(entry.path); return; }
+    setScan(null);
     setPicked(entry);
+  };
+
+  const openPickedFolder = () => {
+    const entry = picked;
+    setPicked(null);
+    setDir(entry.path);
+  };
+
+  const downloadFolder = async () => {
+    setScan({ running: true, found: 0 });
+    try {
+      const result = await manager.addFolder(picked, targetRoot, (found) => setScan({ running: true, found }));
+      setScan({ done: result });
+    } catch (folderError) {
+      if (folderError.sessionExpired) { auth.logout(); return; }
+      setScan({ error: folderError.message || String(folderError) });
+    }
   };
 
   const sort = SORTS[sortIndex];
@@ -190,19 +208,25 @@ export function BrowserScreen({ manager, client }) {
           </View>
         ) : null}
 
-        {/* file dialog */}
+        {/* file / folder dialog */}
         {picked ? (
           <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000000cc', alignItems: 'center', justifyContent: 'center' }}>
             <FocusScope focusKey="dialog" autoFocus trap>
               <View style={{ width: 880, borderRadius: 16, backgroundColor: '#17171a', padding: 40, gap: 26 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
-                  <Icon name="file" size={30} color={colors.muted} fill="none" />
+                  <Icon name={picked.isDir ? 'folder' : 'file'} size={30} color={picked.isDir ? '#ffd166' : colors.muted} fill={picked.isDir ? '#ffd166' : 'none'} />
                   <Text numberOfLines={2} style={{ flex: 1, fontFamily: 'Inter-Regular', fontSize: 28, color: colors.fg }}>{picked.name}</Text>
                 </View>
                 <View style={{ gap: 8 }}>
-                  <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>{t('browser.size')}: {formatBytes(picked.size)}</Text>
+                  {picked.isDir ? (
+                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>{t('browser.folderHint')}</Text>
+                  ) : (
+                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>{t('browser.size')}: {formatBytes(picked.size)}</Text>
+                  )}
                   <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>
-                    {t('browser.dest')}: {targetRoot}{IMAGE_EXT.test(picked.name) ? '/homebrew (' + t('browser.destGame') + ')' : '/downloads/baidupan'}
+                    {t('browser.dest')}: {targetRoot}{picked.isDir
+                      ? `/downloads/baidupan/${picked.name}`
+                      : IMAGE_EXT.test(picked.name) ? '/homebrew (' + t('browser.destGame') + ')' : '/downloads/baidupan'}
                   </Text>
                   {rootsRef.current.length > 1 ? (
                     <View style={{ flexDirection: 'row', gap: 12, marginTop: 6 }}>
@@ -219,18 +243,68 @@ export function BrowserScreen({ manager, client }) {
                     </View>
                   ) : null}
                 </View>
-                <View style={{ flexDirection: 'row', gap: 18 }}>
-                  <motion.View focusKey="dialog:download" onPress={() => { manager.add(picked, targetRoot); setPicked(null); }}
-                    style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#f2f2f3', alignItems: 'center', justifyContent: 'center' }}>
-                    <FocusRing />
-                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: '#0d0d0f' }}>{t('browser.download')}</Text>
-                  </motion.View>
-                  <motion.View focusKey="dialog:cancel" onPress={() => setPicked(null)}
-                    style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#212125', alignItems: 'center', justifyContent: 'center' }}>
-                    <FocusRing />
-                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: colors.fg }}>{t('common.cancel')}</Text>
-                  </motion.View>
-                </View>
+                {scan?.running ? (
+                  <View style={{ gap: 14 }}>
+                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 23, color: colors.fg }}>{t('browser.scanning', { n: scan.found })}</Text>
+                  </View>
+                ) : scan?.done ? (
+                  <View style={{ gap: 14 }}>
+                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 23, color: scan.done.count ? '#7ee081' : colors.muted }}>
+                      {scan.done.count ? t('browser.queued', { n: scan.done.count, size: formatBytes(scan.done.bytes) }) : t('browser.folderEmpty')}
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 18 }}>
+                      <motion.View focusKey="dialog:close" onPress={() => setPicked(null)}
+                        style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#f2f2f3', alignItems: 'center', justifyContent: 'center' }}>
+                        <FocusRing />
+                        <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: '#0d0d0f' }}>{t('common.ok')}</Text>
+                      </motion.View>
+                    </View>
+                  </View>
+                ) : scan?.error ? (
+                  <View style={{ gap: 14 }}>
+                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: '#ff6b6b', maxWidth: 760 }}>{scan.error}</Text>
+                    <View style={{ flexDirection: 'row', gap: 18 }}>
+                      <motion.View focusKey="dialog:retryscan" onPress={downloadFolder}
+                        style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#f2f2f3', alignItems: 'center', justifyContent: 'center' }}>
+                        <FocusRing />
+                        <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: '#0d0d0f' }}>{t('browser.retry')}</Text>
+                      </motion.View>
+                      <motion.View focusKey="dialog:cancel" onPress={() => setPicked(null)}
+                        style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#212125', alignItems: 'center', justifyContent: 'center' }}>
+                        <FocusRing />
+                        <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: colors.fg }}>{t('common.cancel')}</Text>
+                      </motion.View>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={{ flexDirection: 'row', gap: 18 }}>
+                    {picked.isDir ? (
+                      <>
+                        <motion.View focusKey="dialog:open" onPress={openPickedFolder}
+                          style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#212125', alignItems: 'center', justifyContent: 'center' }}>
+                          <FocusRing />
+                          <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: colors.fg }}>{t('browser.open')}</Text>
+                        </motion.View>
+                        <motion.View focusKey="dialog:downloadfolder" onPress={downloadFolder}
+                          style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#f2f2f3', alignItems: 'center', justifyContent: 'center' }}>
+                          <FocusRing />
+                          <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: '#0d0d0f' }}>{t('browser.downloadFolder')}</Text>
+                        </motion.View>
+                      </>
+                    ) : (
+                      <motion.View focusKey="dialog:download" onPress={() => { manager.add(picked, targetRoot); setPicked(null); }}
+                        style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#f2f2f3', alignItems: 'center', justifyContent: 'center' }}>
+                        <FocusRing />
+                        <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: '#0d0d0f' }}>{t('browser.download')}</Text>
+                      </motion.View>
+                    )}
+                    <motion.View focusKey="dialog:cancel" onPress={() => setPicked(null)}
+                      style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#212125', alignItems: 'center', justifyContent: 'center' }}>
+                      <FocusRing />
+                      <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: colors.fg }}>{t('common.cancel')}</Text>
+                    </motion.View>
+                  </View>
+                )}
               </View>
             </FocusScope>
           </View>

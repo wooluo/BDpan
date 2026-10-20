@@ -79,7 +79,9 @@ function createDownloadManager({ client, tokens }) {
   };
 
   function destinationFor(job, root) {
-    const folder = IMAGE_EXT.test(job.filename) ? `${root}/homebrew` : `${root}/downloads/baidupan`;
+    const folder = IMAGE_EXT.test(job.filename)
+      ? `${root}/homebrew`
+      : `${root}/downloads/baidupan${job.relDir ? `/${job.relDir}` : ''}`;
     ensureDir(fs, folder);
     return `${folder}/${job.filename}`;
   }
@@ -203,10 +205,10 @@ function createDownloadManager({ client, tokens }) {
     }
   }
 
-  return {
+  const manager = {
     subscribe,
     jobs: () => jobs,
-    add(file, root = '/data') {
+    add(file, root = '/data', relDir = '') {
       const existing = jobs.find((job) => job.path === file.path);
       if (existing && existing.state !== 'error') return existing;
       const job = existing || {
@@ -214,6 +216,7 @@ function createDownloadManager({ client, tokens }) {
         path: file.path,
         filename: file.name,
         sizeBytes: file.size,
+        relDir,
         root,
         state: 'queued',
         written: 0,
@@ -229,6 +232,35 @@ function createDownloadManager({ client, tokens }) {
       notify();
       pump();
       return job;
+    },
+    // Recursively walks a netdisk folder (list pages of 1000) and queues every
+    // file under it, keeping the subfolder layout below downloads/baidupan/<name>.
+    async addFolder(folder, root = '/data', onFound = null) {
+      const base = folder.path.replace(/\/+$/, '');
+      const found = [];
+      const pending = [base];
+      while (pending.length) {
+        const current = pending.shift();
+        for (let page = 1; ; page += 1) {
+          const batch = await client.list(current, { page });
+          for (const item of batch) {
+            if (item.isDir) pending.push(item.path);
+            else found.push(item);
+          }
+          if (onFound) { try { onFound(found.length); } catch {} }
+          if (batch.length < 1000) break;
+        }
+      }
+      let count = 0;
+      let bytes = 0;
+      for (const file of found) {
+        const before = jobs.length;
+        const relDir = file.path.slice(base.length + 1, file.path.length - file.name.length - 1);
+        manager.add({ path: file.path, name: file.name, size: file.size }, root, relDir);
+        if (jobs.length > before) { count += 1; bytes += file.size || 0; }
+      }
+      console.log(`[baidupan] folder ${base}: queued ${count}/${found.length} files (${formatBytes(bytes)})`);
+      return { count, bytes, total: found.length };
     },
     pause(id) {
       const job = jobs.find((entry) => entry.id === id);
@@ -258,6 +290,7 @@ function createDownloadManager({ client, tokens }) {
       notify();
     },
   };
+  return manager;
 }
 
 export { createDownloadManager, formatBytes, IMAGE_EXT };

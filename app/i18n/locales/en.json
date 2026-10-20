@@ -510,5 +510,12 @@
   "downloads.resume": "Resume",
   "downloads.remove": "Remove",
   "browser.internal": "Internal storage",
-  "browser.external": "Extended drive"
+  "browser.external": "Extended drive",
+  "browser.folderHint": "Everything inside it, subfolders included",
+  "browser.open": "Open",
+  "browser.downloadFolder": "Download folder",
+  "browser.scanning": "Scanning… {n} found",
+  "browser.queued": "{n} files queued ({size})",
+  "browser.folderEmpty": "This folder is empty",
+  "common.ok": "OK"
 }

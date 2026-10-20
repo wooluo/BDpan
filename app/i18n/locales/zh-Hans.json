@@ -482,5 +482,12 @@
   "downloads.resume": "继续",
   "downloads.remove": "删除",
   "browser.internal": "内置存储",
-  "browser.external": "扩展硬盘"
+  "browser.external": "扩展硬盘",
+  "browser.folderHint": "将下载其中的全部文件（含子文件夹）",
+  "browser.open": "打开",
+  "browser.downloadFolder": "下载整个文件夹",
+  "browser.scanning": "正在扫描… 已发现 {n} 个文件",
+  "browser.queued": "已添加 {n} 个文件（{size}）",
+  "browser.folderEmpty": "这个文件夹是空的",
+  "common.ok": "好"
 }

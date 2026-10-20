@@ -480,5 +480,7 @@
   "downloads.error": "失败",
   "downloads.pause": "暂停",
   "downloads.resume": "继续",
-  "downloads.remove": "删除"
+  "downloads.remove": "删除",
+  "browser.internal": "内置存储",
+  "browser.external": "扩展硬盘"
 }

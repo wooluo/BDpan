@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { FocusScope, ScrollView, Text, View, motion } from '@ps5-react/core';
+import { FocusScope, FileSystem, ScrollView, Text, View, motion } from '@ps5-react/core';
 import { FocusRing } from '../ui/FocusRing.jsx';
 import { Icon } from '../ui/Icon.jsx';
 import { colors } from '../ui/colors.js';
 import { useT } from '../i18n/index.js';
+import { consoleRoots } from '../state/roots.js';
+import { loadList, saveList } from '../state/saved.js';
 import { createClient } from './api.js';
 import { useAuth } from './auth.js';
 import { formatBytes, IMAGE_EXT } from './queue.js';
+
+const SETTINGS = 'settings.json';
+
+function storageRoots() {
+  try { return consoleRoots(() => FileSystem.mounts()); } catch { return ['/data']; }
+}
+
+function rootLabel(root, t) {
+  if (root === '/data') return t('browser.internal');
+  const tail = root.split('/').filter(Boolean).pop();
+  return `${t('browser.external')} (${tail})`;
+}
 
 const SORTS = [
   { id: 'name', order: 'name', desc: false },
@@ -60,6 +74,17 @@ export function BrowserScreen({ manager, client }) {
   const [sortIndex, setSortIndex] = useState(0);
   const [quota, setQuota] = useState(null);
   const [picked, setPicked] = useState(null); // file detail dialog
+  const [targetRoot, setTargetRoot] = useState(() => {
+    const saved = loadList(SETTINGS, 'settings').downloadRoot;
+    return saved || '/data';
+  });
+  const rootsRef = useRef(['/data']);
+  rootsRef.current = storageRoots();
+  const chooseRoot = (root) => {
+    setTargetRoot(root);
+    const settings = loadList(SETTINGS, 'settings');
+    saveList(SETTINGS, 'settings', { ...settings, downloadRoot: root });
+  };
 
   const jobs = useSyncExternalStore(manager.subscribe, manager.jobs);
   const activeJob = jobs.find((job) => job.state === 'downloading' || job.state === 'connecting');
@@ -177,11 +202,25 @@ export function BrowserScreen({ manager, client }) {
                 <View style={{ gap: 8 }}>
                   <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>{t('browser.size')}: {formatBytes(picked.size)}</Text>
                   <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>
-                    {t('browser.dest')}: {IMAGE_EXT.test(picked.name) ? '/data/homebrew (' + t('browser.destGame') + ')' : '/data/downloads/baidupan'}
+                    {t('browser.dest')}: {targetRoot}{IMAGE_EXT.test(picked.name) ? '/homebrew (' + t('browser.destGame') + ')' : '/downloads/baidupan'}
                   </Text>
+                  {rootsRef.current.length > 1 ? (
+                    <View style={{ flexDirection: 'row', gap: 12, marginTop: 6 }}>
+                      {rootsRef.current.map((root) => (
+                        <motion.View key={root} focusKey={`dest:${root}`} onPress={() => chooseRoot(root)}
+                          style={{ height: 52, paddingHorizontal: 22, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: root === targetRoot ? '#f2f2f3' : '#212125' }}>
+                          <FocusRing />
+                          <Text style={{ fontFamily: 'Inter-Regular', fontSize: 21, color: root === targetRoot ? '#0d0d0f' : colors.fg }}>
+                            {rootLabel(root, t)}
+                          </Text>
+                        </motion.View>
+                      ))}
+                    </View>
+                  ) : null}
                 </View>
                 <View style={{ flexDirection: 'row', gap: 18 }}>
-                  <motion.View focusKey="dialog:download" onPress={() => { manager.add(picked); setPicked(null); }}
+                  <motion.View focusKey="dialog:download" onPress={() => { manager.add(picked, targetRoot); setPicked(null); }}
                     style={{ height: 64, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#f2f2f3', alignItems: 'center', justifyContent: 'center' }}>
                     <FocusRing />
                     <Text style={{ fontFamily: 'Inter-Regular', fontSize: 24, color: '#0d0d0f' }}>{t('browser.download')}</Text>

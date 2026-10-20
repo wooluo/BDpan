@@ -508,5 +508,7 @@
   "downloads.error": "Failed",
   "downloads.pause": "Pause",
   "downloads.resume": "Resume",
-  "downloads.remove": "Remove"
+  "downloads.remove": "Remove",
+  "browser.internal": "Internal storage",
+  "browser.external": "Extended drive"
 }

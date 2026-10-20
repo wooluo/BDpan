@@ -44,7 +44,12 @@ function createDownloadManager({ client, tokens }) {
   let task = null;
   let pumping = false;
 
-  const notify = () => listeners.forEach((listener) => listener());
+  // useSyncExternalStore compares snapshot references: hand out a fresh array
+  // whenever anything changed, or React keeps showing the frozen first render.
+  const notify = () => {
+    jobs = [...jobs];
+    listeners.forEach((listener) => listener());
+  };
   const subscribe = (listener) => {
     listeners.add(listener);
     listener();

@@ -4,7 +4,7 @@ import { FocusRing } from '../ui/FocusRing.jsx';
 import { Icon } from '../ui/Icon.jsx';
 import { colors } from '../ui/colors.js';
 import { useT } from '../i18n/index.js';
-import { formatBytes } from './queue.js';
+import { ARCHIVE_EXT, formatBytes } from './queue.js';
 
 const STATE_LABEL = {
   queued: 'downloads.queued', connecting: 'downloads.connecting', downloading: 'downloads.downloading',
@@ -64,6 +64,41 @@ function JobRow({ job, manager }) {
           <Text style={actionTextStyle}>{t('downloads.remove')}</Text>
         </motion.View>
       </View>
+      {job.state === 'done' && ARCHIVE_EXT.test(job.filename) ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          {job.extractState === 'extracting' ? (
+            <>
+              <Text style={{ fontFamily: 'Inter-Regular', fontSize: 20, color: '#7ee081' }}>{t('downloads.extracting')}</Text>
+              <View style={{ flex: 1, height: 8, borderRadius: 4, backgroundColor: '#2b2b30', overflow: 'hidden' }}>
+                <View style={{ width: `${job.extractTotal ? Math.min(100, (job.extractWritten / job.extractTotal) * 100) : 0}%`, height: 8, backgroundColor: '#7ee081' }} />
+              </View>
+              <Text style={{ fontFamily: 'Inter-Regular', fontSize: 19, color: colors.muted }}>
+                {formatBytes(job.extractWritten || 0)}{job.extractTotal ? ` / ${formatBytes(job.extractTotal)}` : ''}
+              </Text>
+            </>
+          ) : job.extractState === 'done' ? (
+            <Text style={{ fontFamily: 'Inter-Regular', fontSize: 20, color: '#7ee081' }}>
+              {t('downloads.extractDone')}{job.extractImages ? ` · ${t('downloads.extractImages', { n: job.extractImages })}` : ''}
+            </Text>
+          ) : job.extractState === 'error' ? (
+            <>
+              <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Inter-Regular', fontSize: 19, color: '#ff6b6b' }}>{job.extractError}</Text>
+              <motion.View focusKey={`extract-retry:${job.id}`} onPress={() => manager.extract(job.id)} style={actionStyle}>
+                <FocusRing />
+                <Icon name="play" size={18} color={colors.fg} fill="none" />
+                <Text style={actionTextStyle}>{t('downloads.extractRetry')}</Text>
+              </motion.View>
+            </>
+          ) : (
+            <motion.View focusKey={`extract:${job.id}`} onPress={() => manager.extract(job.id)}
+              style={{ ...actionStyle, backgroundColor: '#f2f2f3' }}>
+              <FocusRing />
+              <Icon name="folder" size={18} color="#0d0d0f" fill="none" />
+              <Text style={{ ...actionTextStyle, color: '#0d0d0f' }}>{t('downloads.extract')}</Text>
+            </motion.View>
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }

@@ -517,5 +517,11 @@
   "browser.scanning": "Scanning… {n} found",
   "browser.queued": "{n} files queued ({size})",
   "browser.folderEmpty": "This folder is empty",
-  "common.ok": "OK"
+  "common.ok": "OK",
+  "downloads.extract": "Extract",
+  "downloads.extracting": "Extracting…",
+  "downloads.extractDone": "Extracted",
+  "downloads.extractImages": "{n} game image(s) moved to homebrew",
+  "downloads.extractRetry": "Retry",
+  "browser.extractHint": "After download, extract it from the Downloads tab; game images inside go to homebrew automatically"
 }

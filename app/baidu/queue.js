@@ -3,15 +3,20 @@
 // the engine's checkpoint is keyed by destination+size, so a paused file
 // resumes from the same partial however many times the link is re-resolved.
 
-import { Downloads, FileSystem, Http, Platform } from '@ps5-react/core';
+import { Archives, Downloads, FileSystem, Http, Platform } from '@ps5-react/core';
 import { NETDISK_UA } from './api.js';
 
 const IMAGE_EXT = /\.(ffpfsc|ffpfs|ffpkg|exfat)$/i;
+const ARCHIVE_EXT = /\.(zip|rar|7z|tar|tgz|tbz2|txz)$/i;
 const STATE_FILE = 'baidupan/downloads.json';
 
 function now() { return Date.now(); }
 
 function hostOf(url) { return url.replace(/^https?:\/\//, '').split('/')[0]; }
+
+function escapeRegExp(text) { return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function dirNameOf(path) { const cut = path.lastIndexOf('/'); return cut > 0 ? path.slice(0, cut) : ''; }
 
 function ensureDir(fs, dir) {
   const parts = dir.split('/').filter(Boolean);
@@ -84,6 +89,39 @@ function createDownloadManager({ client, tokens }) {
       : `${root}/downloads/baidupan${job.relDir ? `/${job.relDir}` : ''}`;
     ensureDir(fs, folder);
     return `${folder}/${job.filename}`;
+  }
+
+  function listDirSafe(folder) {
+    try { return fs.readDir(folder) || []; } catch { return []; }
+  }
+
+  function walkFiles(folder) {
+    const out = [];
+    for (const item of listDirSafe(folder)) {
+      const full = `${folder}/${item.name}`;
+      if (item.isDirectory) out.push(...walkFiles(full));
+      else out.push(full);
+    }
+    return out;
+  }
+
+  // ShadowMount+ scans <root>/homebrew: game images found inside an extracted
+  // archive are moved there so they show up for install without another step.
+  function moveGameImages(folder, root) {
+    let moved = 0;
+    for (const file of walkFiles(folder)) {
+      if (!IMAGE_EXT.test(file)) continue;
+      const target = `${root}/homebrew/${file.split('/').pop()}`;
+      try {
+        ensureDir(fs, `${root}/homebrew`);
+        if (fs.exists(target)) continue;
+        fs.rename(file, target);
+        moved += 1;
+      } catch (error) {
+        console.log(`[baidupan] image move failed: ${error.message}`);
+      }
+    }
+    return moved;
   }
 
   // The CDN hands out two kinds of nodes: ones serving ranged bytes straight over
@@ -262,6 +300,55 @@ function createDownloadManager({ client, tokens }) {
       console.log(`[baidupan] folder ${base}: queued ${count}/${found.length} files (${formatBytes(bytes)})`);
       return { count, bytes, total: found.length };
     },
+    // Extracts a finished archive job. Multi-volume RAR (.part1.rar) gathers
+    // its sibling volumes from the same folder; extracted game images are
+    // routed to <root>/homebrew for ShadowMount+, the rest stays unpacked
+    // next to the downloads.
+    async extract(id) {
+      const job = jobs.find((entry) => entry.id === id);
+      if (!job || job.state !== 'done' || !ARCHIVE_EXT.test(job.filename) || job.extractState === 'extracting') return;
+      const archive = destinationFor(job, job.root);
+      let sources = [archive];
+      const part = job.filename.match(/^(.*)\.part0*1\.rar$/i);
+      if (part) {
+        const folder = dirNameOf(archive);
+        const pattern = new RegExp(`^${escapeRegExp(part[1])}\\.part\\d+\\.rar$`, 'i');
+        sources = listDirSafe(folder)
+          .filter((item) => !item.isDirectory && pattern.test(item.name))
+          .map((item) => `${folder}/${item.name}`)
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        if (!sources.length) sources = [archive];
+      }
+      const label = job.filename.replace(ARCHIVE_EXT, '').replace(/[.]+$/, '') || 'archive';
+      const outDir = `${job.root}/downloads/baidupan/${label}`;
+      ensureDir(fs, outDir);
+      job.extractState = 'extracting';
+      job.extractError = null;
+      job.extractWritten = 0;
+      job.extractTotal = 0;
+      notify();
+      persist();
+      try {
+        const task = Archives.extract({ sources, destination: outDir });
+        const off = task.subscribe((snapshot) => {
+          job.extractWritten = snapshot.written ?? 0;
+          job.extractTotal = snapshot.total ?? 0;
+          notify();
+        });
+        try { await task.done; } finally { off(); }
+        const images = moveGameImages(outDir, job.root);
+        if (!walkFiles(outDir).length) { try { fs.removeTree(outDir); } catch {} }
+        job.extractState = 'done';
+        job.extractImages = images;
+        console.log(`[baidupan] ${job.filename}: extracted, ${images} game image(s) -> ${job.root}/homebrew`);
+      } catch (error) {
+        job.extractState = 'error';
+        job.extractError = error.message || String(error);
+        console.log(`[baidupan] extract failed: ${job.extractError}`);
+      }
+      notify();
+      persist();
+    },
     pause(id) {
       const job = jobs.find((entry) => entry.id === id);
       if (!job || job.state !== 'downloading' || !task) return;
@@ -293,4 +380,4 @@ function createDownloadManager({ client, tokens }) {
   return manager;
 }
 
-export { createDownloadManager, formatBytes, IMAGE_EXT };
+export { createDownloadManager, formatBytes, IMAGE_EXT, ARCHIVE_EXT };

@@ -8,7 +8,7 @@ import { consoleRoots } from '../state/roots.js';
 import { loadList, saveList } from '../state/saved.js';
 import { createClient } from './api.js';
 import { useAuth } from './auth.js';
-import { formatBytes, IMAGE_EXT } from './queue.js';
+import { ARCHIVE_EXT, formatBytes, IMAGE_EXT } from './queue.js';
 
 const SETTINGS = 'settings.json';
 
@@ -228,6 +228,9 @@ export function BrowserScreen({ manager, client }) {
                       ? `/downloads/baidupan/${picked.name}`
                       : IMAGE_EXT.test(picked.name) ? '/homebrew (' + t('browser.destGame') + ')' : '/downloads/baidupan'}
                   </Text>
+                  {!picked.isDir && ARCHIVE_EXT.test(picked.name) ? (
+                    <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>{t('browser.extractHint')}</Text>
+                  ) : null}
                   {rootsRef.current.length > 1 ? (
                     <View style={{ flexDirection: 'row', gap: 12, marginTop: 6 }}>
                       {rootsRef.current.map((root) => (

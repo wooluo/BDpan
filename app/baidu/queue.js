@@ -184,6 +184,7 @@ function createDownloadManager({ client, tokens }) {
           job.written = job.total = job.sizeBytes;
           job.completedAt = now();
           console.log(`[baidupan] ${job.filename} already on disk, marking done`);
+          maybeAutoExtract(job);
           return;
         }
       } catch {}
@@ -216,7 +217,10 @@ function createDownloadManager({ client, tokens }) {
         const settled = finalState === 'completed' ? 'done' : 'error';
         job.state = settled;
         if (settled === 'error' && !job.error) job.error = task.snapshot?.error || 'download failed';
-        if (job.state === 'done') job.completedAt = now();
+        if (job.state === 'done') {
+          job.completedAt = now();
+          maybeAutoExtract(job);
+        }
         job.bytesPerSecond = 0;
       }
     } catch (error) {
@@ -243,10 +247,71 @@ function createDownloadManager({ client, tokens }) {
     }
   }
 
+  // A folder-batch of split RAR volumes extracts itself once every volume of
+  // the set has finished downloading; single picks stay manual on purpose.
+  function maybeAutoExtract(job) {
+    if (!job.batched || !/\.part\d+\.rar$/i.test(job.filename)) return;
+    const folder = dirNameOf(job.path);
+    const base = job.filename.replace(/\.part\d+\.rar$/i, '');
+    const pattern = new RegExp(`^${escapeRegExp(base)}\\.part\\d+\\.rar$`, 'i');
+    const set = jobs.filter((entry) => entry.batched && entry.path.startsWith(`${folder}/`) && pattern.test(entry.filename));
+    if (set.length < 2 || !set.every((entry) => entry.state === 'done')) return;
+    const first = set.find((entry) => /\.part0*1\.rar$/i.test(entry.filename));
+    if (first && !first.extractState) runExtract(first);
+  }
+
+  async function runExtract(job) {
+    if (job.state !== 'done' || !ARCHIVE_EXT.test(job.filename) || job.extractState === 'extracting') return;
+      const archive = destinationFor(job, job.root);
+      let sources = [archive];
+      const part = job.filename.match(/^(.*)\.part0*1\.rar$/i);
+      if (part) {
+        const folder = dirNameOf(archive);
+        const pattern = new RegExp(`^${escapeRegExp(part[1])}\\.part\\d+\\.rar$`, 'i');
+        sources = listDirSafe(folder)
+          .filter((item) => !item.isDirectory && pattern.test(item.name))
+          .map((item) => `${folder}/${item.name}`)
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        if (!sources.length) sources = [archive];
+      }
+      const label = job.filename
+        .replace(/\.part\d+\.rar$/i, '')
+        .replace(ARCHIVE_EXT, '')
+        .replace(/[.]+$/, '') || 'archive';
+      const outDir = `${job.root}/downloads/baidupan/${label}`;
+      ensureDir(fs, outDir);
+      job.extractState = 'extracting';
+      job.extractError = null;
+      job.extractWritten = 0;
+      job.extractTotal = 0;
+      notify();
+      persist();
+      try {
+        const task = Archives.extract({ sources, destination: outDir });
+        const off = task.subscribe((snapshot) => {
+          job.extractWritten = snapshot.written ?? 0;
+          job.extractTotal = snapshot.total ?? 0;
+          notify();
+        });
+        try { await task.done; } finally { off(); }
+        const images = moveGameImages(outDir, job.root);
+        if (!walkFiles(outDir).length) { try { fs.removeTree(outDir); } catch {} }
+        job.extractState = 'done';
+        job.extractImages = images;
+        console.log(`[baidupan] ${job.filename}: extracted, ${images} game image(s) -> ${job.root}/homebrew`);
+      } catch (error) {
+        job.extractState = 'error';
+        job.extractError = error.message || String(error);
+        console.log(`[baidupan] extract failed: ${job.extractError}`);
+      }
+      notify();
+      persist();
+  }
+
   const manager = {
     subscribe,
     jobs: () => jobs,
-    add(file, root = '/data', relDir = '') {
+    add(file, root = '/data', { relDir = '', batched = false } = {}) {
       const existing = jobs.find((job) => job.path === file.path);
       if (existing && existing.state !== 'error') return existing;
       const job = existing || {
@@ -255,6 +320,7 @@ function createDownloadManager({ client, tokens }) {
         filename: file.name,
         sizeBytes: file.size,
         relDir,
+        batched,
         root,
         state: 'queued',
         written: 0,
@@ -294,7 +360,7 @@ function createDownloadManager({ client, tokens }) {
       for (const file of found) {
         const before = jobs.length;
         const relDir = file.path.slice(base.length + 1, file.path.length - file.name.length - 1);
-        manager.add({ path: file.path, name: file.name, size: file.size }, root, relDir);
+        manager.add({ path: file.path, name: file.name, size: file.size }, root, { relDir, batched: true });
         if (jobs.length > before) { count += 1; bytes += file.size || 0; }
       }
       console.log(`[baidupan] folder ${base}: queued ${count}/${found.length} files (${formatBytes(bytes)})`);
@@ -306,48 +372,7 @@ function createDownloadManager({ client, tokens }) {
     // next to the downloads.
     async extract(id) {
       const job = jobs.find((entry) => entry.id === id);
-      if (!job || job.state !== 'done' || !ARCHIVE_EXT.test(job.filename) || job.extractState === 'extracting') return;
-      const archive = destinationFor(job, job.root);
-      let sources = [archive];
-      const part = job.filename.match(/^(.*)\.part0*1\.rar$/i);
-      if (part) {
-        const folder = dirNameOf(archive);
-        const pattern = new RegExp(`^${escapeRegExp(part[1])}\\.part\\d+\\.rar$`, 'i');
-        sources = listDirSafe(folder)
-          .filter((item) => !item.isDirectory && pattern.test(item.name))
-          .map((item) => `${folder}/${item.name}`)
-          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-        if (!sources.length) sources = [archive];
-      }
-      const label = job.filename.replace(ARCHIVE_EXT, '').replace(/[.]+$/, '') || 'archive';
-      const outDir = `${job.root}/downloads/baidupan/${label}`;
-      ensureDir(fs, outDir);
-      job.extractState = 'extracting';
-      job.extractError = null;
-      job.extractWritten = 0;
-      job.extractTotal = 0;
-      notify();
-      persist();
-      try {
-        const task = Archives.extract({ sources, destination: outDir });
-        const off = task.subscribe((snapshot) => {
-          job.extractWritten = snapshot.written ?? 0;
-          job.extractTotal = snapshot.total ?? 0;
-          notify();
-        });
-        try { await task.done; } finally { off(); }
-        const images = moveGameImages(outDir, job.root);
-        if (!walkFiles(outDir).length) { try { fs.removeTree(outDir); } catch {} }
-        job.extractState = 'done';
-        job.extractImages = images;
-        console.log(`[baidupan] ${job.filename}: extracted, ${images} game image(s) -> ${job.root}/homebrew`);
-      } catch (error) {
-        job.extractState = 'error';
-        job.extractError = error.message || String(error);
-        console.log(`[baidupan] extract failed: ${job.extractError}`);
-      }
-      notify();
-      persist();
+      if (job) await runExtract(job);
     },
     pause(id) {
       const job = jobs.find((entry) => entry.id === id);

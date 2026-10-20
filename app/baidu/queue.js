@@ -299,8 +299,8 @@ function createDownloadManager({ client, tokens }) {
         });
         try { await task.done; } finally { off(); }
         const images = moveGameImages(outDir, job.root);
-        const visible = walkFiles(outDir).filter((file) => !file.split('/').pop().startsWith('.'));
-        if (!visible.length) { try { fs.removeTree(outDir); } catch {} }
+        const extracted = walkFiles(outDir);
+        console.log(`[baidupan] ${job.filename}: ${extracted.length} file(s) unpacked at ${outDir}`);
         job.extractState = 'done';
         job.extractImages = images;
         console.log(`[baidupan] ${job.filename}: extracted, ${images} game image(s) -> ${job.root}/homebrew`);

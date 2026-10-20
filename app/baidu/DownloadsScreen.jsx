@@ -68,7 +68,9 @@ function JobRow({ job, manager }) {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           {job.extractState === 'extracting' ? (
             <>
-              <Text style={{ fontFamily: 'Inter-Regular', fontSize: 20, color: '#7ee081' }}>{t('downloads.extracting')}</Text>
+              <Text style={{ fontFamily: 'Inter-Regular', fontSize: 20, color: '#7ee081' }}>
+                {t('downloads.extracting')}{job.extractTotal ? ` ${Math.floor((job.extractWritten / job.extractTotal) * 100)}%` : ''}
+              </Text>
               <View style={{ flex: 1, height: 8, borderRadius: 4, backgroundColor: '#2b2b30', overflow: 'hidden' }}>
                 <View style={{ width: `${job.extractTotal ? Math.min(100, (job.extractWritten / job.extractTotal) * 100) : 0}%`, height: 8, backgroundColor: '#7ee081' }} />
               </View>

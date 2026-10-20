@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { FocusScope, ScrollView, Text, View, motion } from '@ps5-react/core';
 import { FocusRing } from '../ui/FocusRing.jsx';
 import { Icon } from '../ui/Icon.jsx';
@@ -16,7 +16,7 @@ const STATE_COLOR = {
   paused: '#ffd166', done: '#7ee081', error: '#ff6b6b',
 };
 
-function JobRow({ job, manager }) {
+function JobRow({ job, manager, onExtractAgain }) {
   const t = useT();
   const percent = job.total ? Math.floor((job.written / job.total) * 100) : null;
   const running = job.state === 'downloading' || job.state === 'connecting';
@@ -83,7 +83,7 @@ function JobRow({ job, manager }) {
               <Text style={{ flex: 1, fontFamily: 'Inter-Regular', fontSize: 20, color: '#7ee081' }}>
                 {t('downloads.extractDone')}{job.extractImages ? ` · ${t('downloads.extractImages', { n: job.extractImages })}` : ''}
               </Text>
-              <motion.View focusKey={`extract-again:${job.id}`} onPress={() => manager.extract(job.id)} style={actionStyle}>
+              <motion.View focusKey={`extract-again:${job.id}`} onPress={() => onExtractAgain(job.id)} style={actionStyle}>
                 <FocusRing />
                 <Icon name="folder" size={18} color={colors.fg} fill="none" />
                 <Text style={actionTextStyle}>{t('downloads.extractAgain')}</Text>
@@ -118,6 +118,8 @@ const actionTextStyle = { fontFamily: 'Inter-Regular', fontSize: 20, color: colo
 export function DownloadsScreen({ manager }) {
   const t = useT();
   const jobs = useSyncExternalStore(manager.subscribe, manager.jobs);
+  const [confirmId, setConfirmId] = useState(null);
+  const confirmJob = jobs.find((job) => job.id === confirmId);
 
   return (
     <FocusScope focusKey="screen" autoFocus>
@@ -127,9 +129,31 @@ export function DownloadsScreen({ manager }) {
             <Text style={{ fontFamily: 'Inter-Regular', fontSize: 26, color: colors.muted }}>{t('downloads.none')}</Text>
           </View>
         ) : jobs.map((job) => (
-          <JobRow key={job.id} job={job} manager={manager} />
+          <JobRow key={job.id} job={job} manager={manager} onExtractAgain={setConfirmId} />
         ))}
       </ScrollView>
+      {confirmJob ? (
+        <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000000cc', alignItems: 'center', justifyContent: 'center' }}>
+          <FocusScope focusKey="extract-dialog" autoFocus trap>
+            <View style={{ width: 760, borderRadius: 16, backgroundColor: '#17171a', padding: 38, gap: 22 }}>
+              <Text numberOfLines={2} style={{ fontFamily: 'Inter-Regular', fontSize: 27, color: colors.fg }}>{confirmJob.filename}</Text>
+              <Text style={{ fontFamily: 'Inter-Regular', fontSize: 22, color: colors.muted }}>{t('downloads.extractConfirmBody')}</Text>
+              <View style={{ flexDirection: 'row', gap: 18 }}>
+                <motion.View focusKey="extract-confirm" onPress={() => { setConfirmId(null); manager.extract(confirmJob.id); }}
+                  style={{ height: 62, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#f2f2f3', alignItems: 'center', justifyContent: 'center' }}>
+                  <FocusRing />
+                  <Text style={{ fontFamily: 'Inter-Regular', fontSize: 23, color: '#0d0d0f' }}>{t('downloads.extractConfirmOk')}</Text>
+                </motion.View>
+                <motion.View focusKey="extract-cancel" onPress={() => setConfirmId(null)}
+                  style={{ height: 62, paddingHorizontal: 30, borderRadius: 10, backgroundColor: '#212125', alignItems: 'center', justifyContent: 'center' }}>
+                  <FocusRing />
+                  <Text style={{ fontFamily: 'Inter-Regular', fontSize: 23, color: colors.fg }}>{t('common.cancel')}</Text>
+                </motion.View>
+              </View>
+            </View>
+          </FocusScope>
+        </View>
+      ) : null}
     </FocusScope>
   );
 }

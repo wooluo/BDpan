@@ -85,7 +85,7 @@
     "sha256": "ce2669c51272b70bc0aafe9a4e6223e5c7720edaebb40201db191634aa503f5e"
   },
   "filesystemHelperClient": {
-    "url": "https://github.com/blackbearreloaded/ProsperoStore.git",
+    "url": "https://github.com/darkxex/ProsperoStore.git",
     "revision": "335d8c43f916020205f445b76b66106ee50d2eeb"
   },
   "filesystemHelper": {

@@ -43,18 +43,25 @@ file_sizes() {
         find "$app" -type f -printf '%s\n'
     fi
 }
+# macOS scribbles bookkeeping files onto mounted volumes (.fseventsd, Spotlight);
+# they are not part of the app and must not count as payload.
+count_files() {
+    find "$1" -type f | awk '!/\/\.(fseventsd|Spotlight-V100|Trashes|DS_Store|TemporaryItems|metadata_never_index)(\/|$)/' | wc -l
+}
 clusters=$(file_sizes | awk -v c="$cluster_bytes" '{ n += int(($1 + c - 1) / c) } END { print n + 0 }')
 directories=$(find "$app" -type d | wc -l)
 payload=$(( (clusters + directories) * cluster_bytes ))
 size=$(( (payload + slack + 1048575) / 1048576 * 1048576 ))
 
 mkdir -p "$(dirname "$out")"
-rm -f "$out"
+rm -f "$out" "$out.dmg"
 
 # macOS has neither exfatprogs nor loop mounts, but hdiutil formats and attaches
-# an exFAT image for the current user with no root at all.
+# an exFAT image for the current user with no root at all. It insists on a .dmg
+# file name, so build under one and rename at the end.
 if [ "$(uname -s)" = Darwin ]; then
-    dev=$(hdiutil create -size "$size" -layout NONE -fs exfat -volname "$label" -attach "$out" 2>/dev/null |
+    staging="$out.dmg"
+    dev=$(hdiutil create -size "$size" -layout NONE -fs exfat -volname "$label" -attach "$staging" 2>/dev/null |
         sed -n 's/^\(\/dev\/disk[0-9]*\).*/\1/p' | head -1)
     [ -n "$dev" ] || { echo "error: hdiutil could not create an exFAT image" >&2; exit 1; }
     volume="/Volumes/$label"
@@ -63,8 +70,8 @@ if [ "$(uname -s)" = Darwin ]; then
         echo "error: copying into the image failed" >&2
         exit 1
     fi
-    src=$(find "$app" -type f | wc -l)
-    dst=$(find "$volume" -type f | wc -l)
+    src=$(count_files "$app")
+    dst=$(count_files "$volume")
     if [ "$src" != "$dst" ]; then
         hdiutil detach "$dev" >/dev/null 2>&1
         echo "error: wrote $dst files, the app has $src" >&2
@@ -72,6 +79,7 @@ if [ "$(uname -s)" = Darwin ]; then
     fi
     sync
     hdiutil detach "$dev" >/dev/null
+    mv "$staging" "$out"
     echo "hdiutil: label $label, $size bytes"
     echo "wrote $out ($(stat -f%z "$out") bytes)"
     exit 0
@@ -129,8 +137,8 @@ mount_image() {
 mount_image || { echo "error: could not mount $out, install exfat-fuse or a kernel with exfat" >&2; exit 1; }
 mounted=1
 cp -r "$app/." "$mnt/"
-src=$(find "$app" -type f | wc -l)
-dst=$(find "$mnt" -type f | wc -l)
+src=$(count_files "$app")
+dst=$(count_files "$mnt")
 [ "$src" = "$dst" ] || { echo "error: wrote $dst files, the app has $src" >&2; exit 1; }
 sync
 umount "$mnt" || fusermount -u "$mnt"
